@@ -91,3 +91,7 @@ On the first 20 pages of 3 Sodir reports (60 crops), PP-OCRv6 found 5,583 words 
 ## Newer where-are-the-regions and pdf-core (7 October 2026)
 
 Relocked at where-are-the-regions 814d2ac and pdf-core a9328cd. where-are-the-regions added output (each page's rules and each glyph's font) and changed none (its results/rules.md). pdf-core now gives text to glyphs from TeX's maths fonts that had none (its README, "Maths glyph names"); on where-are-the-regions' 1,113 test files that changed 1,610 words in 19 files, all of them unmapped before. Words that decode no longer count as undecodable, so on files typeset with TeX maths the router sends fewer word regions to OCR: on the first pages of 115 arXiv papers, the maths-font words with an unmapped glyph went from 1,219 to 16. Routing on the constructed tune and held-out splits wasn't rerun: none of their 600 files uses a TeX maths font.
+
+## Routes given to ocr_crops (11 October 2026)
+
+tools/ocr_crops.py takes `--routes=<file.jsonl>`: router-cli's lines, one per file, read from a file instead of from running router-cli. doc-router's reader passes the regions its plan recorded, so the crops it reads are the planned ones, whatever router is built when it reads. Without the option nothing changes: on the constructed tune split (300 files, 441 crops, 35,396 words) the output is the same as before, byte for byte apart from timings. On olmOCR-Bench's dev slice (284 files), doc-router's reads with the plan's routes have the same words and maths as reads routed by router-cli.

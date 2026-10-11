@@ -32,7 +32,12 @@ Output, one JSON line per file:
   {"file": ..., "pages": [{"n": 1, "crops": [{"route": 0, "source": "image", "box": [x0, y0, x1, y1],
     "dpi": 200, "px": [w, h], "cache": "<hash>", "secs": 0.41, "words": [[x0, y0, x1, y1, "text", conf], ...]}]}]}
 
+With --routes=<file.jsonl>, the routes come from that file, one router-cli line per file ({"file", "status",
+"pages": [{"n", "width", "height", "routes": [...]}]}), instead of from running router-cli: a caller that
+recorded its routes (doc-router's plan) gets exactly those crops read, whatever router is built now.
+
 usage: python tools/ocr_crops.py <list.txt> --out=<file.jsonl> [--jobs=4] [--pages] [--engine=ppocrv6 [--ppocr-tier=small] [--ppocr-side=960]]
+       python tools/ocr_crops.py --routes=<routes.jsonl> --out=<file.jsonl> [--jobs=4]   routes given, not routed here
        python tools/ocr_crops.py --split=tune --out=<file.jsonl> [--jobs=4] [--pages]    the constructed set's split
        python tools/ocr_crops.py --real=005 --root=<govdocs1 dir> --out=<file.jsonl> [--pages]    the real set's picked pages only
 Held-out data is refused unless tools/check_frozen.py passes.
@@ -263,7 +268,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opt = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
     flags = {a[2:] for a in sys.argv[1:] if a.startswith("--") and "=" not in a}
-    if "out" not in opt or (not args and "split" not in opt and "real" not in opt):
+    if "out" not in opt or (not args and "split" not in opt and "real" not in opt and "routes" not in opt):
         sys.exit(__doc__)
     picked = None
     if "real" in opt:
@@ -277,6 +282,8 @@ def main():
             require_frozen()
         man = json.loads((SET / "manifest.json").read_text(encoding="utf-8"))
         files = [SET / i["file"] for i in man["items"] if i["split"] == opt["split"]]
+    elif "routes" in opt:
+        files = None
     else:
         files = [Path(l.strip()) for l in open(args[0], encoding="utf-8") if l.strip()]
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -314,7 +321,10 @@ def main():
                 room.release()
                 bar.advance(task)
 
-        for d in routes_of(files):
+        given = None
+        if "routes" in opt:
+            given = [json.loads(l) for l in open(opt["routes"], encoding="utf-8") if l.strip()]
+        for d in given if given is not None else routes_of(files):
             row = {"file": d["file"], "pages": []}
             rows.append(row)
             if d.get("status") != "ok":
