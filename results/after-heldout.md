@@ -95,3 +95,7 @@ Relocked at where-are-the-regions 814d2ac and pdf-core a9328cd. where-are-the-re
 ## Routes given to ocr_crops (11 October 2026)
 
 tools/ocr_crops.py takes `--routes=<file.jsonl>`: router-cli's lines, one per file, read from a file instead of from running router-cli. doc-router's reader passes the regions its plan recorded, so the crops it reads are the planned ones, whatever router is built when it reads. Without the option nothing changes: on the constructed tune split (300 files, 441 crops, 35,396 words) the output is the same as before, byte for byte apart from timings. On olmOCR-Bench's dev slice (284 files), doc-router's reads with the plan's routes have the same words and maths as reads routed by router-cli.
+
+## Newer where-are-the-regions: tight type (11 October 2026)
+
+Relocked at where-are-the-regions 6bd5b72, which splits words on tight type (its results/tight-type.md): letters set overlapping and spaces of about 0.14 of the font size had joined whole lines into one word. Routing is unchanged on the constructed tune and held-out splits (600 files, router-cli output identical) and on olmOCR-Bench's dev slice (284 files, the same routes; one image's under_text reason moved from 0.79 to 0.80).
