@@ -99,3 +99,24 @@ tools/ocr_crops.py takes `--routes=<file.jsonl>`: router-cli's lines, one per fi
 ## Newer where-are-the-regions: tight type (11 October 2026)
 
 Relocked at where-are-the-regions 6bd5b72, which splits words on tight type (its results/tight-type.md): letters set overlapping and spaces of about 0.14 of the font size had joined whole lines into one word. Routing is unchanged on the constructed tune and held-out splits (600 files, router-cli output identical) and on olmOCR-Bench's dev slice (284 files, the same routes; one image's under_text reason moved from 0.79 to 0.80).
+
+## Crops rendered with PDFium (14 October 2026)
+
+tools/ocr_crops.py renders its crops with PDFium (pypdfium2, Apache-2.0 / BSD-3-Clause) instead of PyMuPDF, which is AGPL-3.0. The rules are the same. The text's direction comes from each character's baseline as PDFium gives it, and a page that doesn't read as displayed is drawn turned rather than copied with a new /Rotate. A crop covers the pixels of the whole page at its dpi that the padded box covers, rounded outwards as MuPDF rounded them. A file PDFium can't open gets no crops and says so; MuPDF had opened one such file (a DST report) with no pages and stopped the run.
+
+Crops are the same, their pixels not quite:
+
+- On 23 files (rotated, sideways, scanned and born-digital pages; three boxes a page at 300 and 360 dpi), all 174 crops have the same size and position and take the same turn, and the 48 turned ones map word boxes back to the same points.
+- Anti-aliasing differs, by a median of 2.6 grey levels a pixel. Tesseract reads some crops differently: on 56 crops of 27 scanned files, 75% of the words are the same text, and 14,183 words came back against 14,136.
+
+So the check is accuracy, not identity:
+
+| | PyMuPDF | PDFium |
+|---|---|---|
+| constructed tune split, routed: recall, precision, word error, recall in regions that need OCR | 99.68%, 99.86%, 0.45%, 98.80% | 99.69%, 99.87%, 0.44%, 98.81% |
+| the same, Tesseract seconds | 317 | 259 |
+| doc-router alone on 183 OmniParseBench pages it OCRs (761 tests), text dev / test | 17.5 / 15.8 | 20.7 / 17.0 |
+| the same, tables | 22.2 / 22.1 | 22.2 / 19.1 |
+| the same, layout | 47.8 / 40.0 | 50.7 / 46.7 |
+
+On the constructed split the measures move by 0.01 points. On the OmniParseBench pages, 15 more of the 761 tests pass: 17 more text and layout tests, 2 fewer table tests. results/ocr-tune.jsonl is left as it was. Still on PyMuPDF, none of them on the OCR path: the scripts that build and check the sets (build_ocr_set.py, build_real.py, check_real.py, check_truth.py, samples.py) and score_route.py.

@@ -1,6 +1,6 @@
 """OCR the routes: crop every `ocr` route router-cli gives and read it with Tesseract, caching each result.
 
-For each route, the page is rendered with PyMuPDF over the route's box and 6 pt round it, in grey, turned so
+For each route, the page is rendered with PDFium (pypdfium2) over the route's box and 6 pt round it, in grey, turned so
 its own text runs left to right (a page with /Rotate can read sideways as displayed): an image route at
 the image's own resolution (its dpi from the router, kept between 300 and 400), outlined and garbled text
 at 300 dpi. Tesseract reads the crop (TSV output, one word per line with its box and confidence), and the
@@ -43,7 +43,9 @@ usage: python tools/ocr_crops.py <list.txt> --out=<file.jsonl> [--jobs=4] [--pag
 Held-out data is refused unless tools/check_frozen.py passes.
 """
 import hashlib
+import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -54,7 +56,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import fitz
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 from rich.progress import MofNCompleteColumn, Progress, TimeElapsedColumn
 
 from check_frozen import require_frozen
@@ -123,42 +126,78 @@ def routes_of(files):
     return [json.loads(l) for l in out.splitlines() if l.strip()]
 
 
+def turn_box(box, turn, w, h):
+    """A box on a page w by h points (y down) as it lies once the page is turned `turn` degrees clockwise."""
+    def at(x, y):
+        return {0: (x, y), 90: (h - y, x), 180: (w - x, h - y), 270: (y, w - x)}[turn]
+    (ax, ay), (bx, by) = at(box[0], box[1]), at(box[2], box[3])
+    return [min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)]
+
+
 def turned(page):
-    """The page turned so its own text runs left to right, for reading: (the page to render, the matrix
-    from the displayed page to it, the matrix back, a document to keep alive). The text's direction is its
-    lines' most common one in the text layer, by characters; the page keeps its own /Rotate when that
-    already reads (or when it has no text), else the first of 0, 90, 180 and 270 that does. Checked on
-    govdocs1 005: 005530 (/Rotate 270) reads with /Rotate taken off, 005523 and 005944 (/Rotate 90) as
-    displayed. A page that reads as displayed is rendered as it is, unchanged."""
+    """The page turned so its own text runs left to right, for reading: (the page, the turn in degrees
+    clockwise to add to it as displayed, its width and height as displayed). The text's direction is its
+    characters' most common one in the text layer (each character's baseline, as PDFium gives it, rounded
+    to a whole direction); the page keeps its own /Rotate when that already reads (or when it has no text),
+    else takes the first of 0, 90, 180 and 270 that does. Checked on govdocs1 005: 005530 (/Rotate 270)
+    reads with /Rotate taken off, 005523 and 005944 (/Rotate 90) as displayed. A page that reads as
+    displayed is rendered as it is, unchanged."""
     count = Counter()
-    for b in page.get_text("dict")["blocks"]:
-        for line in b.get("lines", []):
-            count[(round(line["dir"][0]), round(line["dir"][1]))] += sum(len(s["text"]) for s in line["spans"])
-    d = fitz.Point(count.most_common(1)[0][0]) if count else None
-    reads = lambda m: d is None or ((v := d * m - fitz.Point(0, 0) * m).x > 0.9 and abs(v.y) < 0.1)
-    if reads(page.rotation_matrix):
-        return page, fitz.Identity, fitz.Identity, None
-    one = fitz.open()
-    one.insert_pdf(page.parent, from_page=page.number, to_page=page.number)
-    cp = one[0]
+    text = page.get_textpage()
+    try:
+        for i in range(text.count_chars()):
+            a = pdfium_c.FPDFText_GetCharAngle(text.raw, i)  # radians, clockwise as seen on the unrotated page
+            if a >= 0 and not chr(pdfium_c.FPDFText_GetUnicode(text.raw, i)).isspace():
+                count[(round(math.cos(a)), round(math.sin(a)))] += 1
+    finally:
+        text.close()
+    d = count.most_common(1)[0][0] if count else None
+
+    def reads(rotation):  # the text's direction, turned clockwise by the page's rotation, runs left to right
+        if d is None:
+            return True
+        c, s = round(math.cos(math.radians(rotation))), round(math.sin(math.radians(rotation)))
+        x, y = d[0] * c - d[1] * s, d[0] * s + d[1] * c
+        return x > 0.9 and abs(y) < 0.1
+
+    rotation = page.get_rotation()
+    w, h = page.get_size()
+    if reads(rotation):
+        return page, 0, w, h
     for r in (0, 90, 180, 270):
-        cp.set_rotation(r)
-        if reads(cp.rotation_matrix):
+        if reads(r):
             break
     else:
-        cp.set_rotation(page.rotation)
-    return cp, page.derotation_matrix * cp.rotation_matrix, cp.derotation_matrix * page.rotation_matrix, one
+        r = rotation
+    return page, (r - rotation) % 360, w, h
 
 
 def crop(turn, box, dpi):
     """The route's box, from the page as displayed, rendered in grey at dpi from the turned page; where the
-    crop's top-left pixel sits, in pixels at that dpi on the turned page; and the matrix from the turned
-    page's points to the displayed page (None when they're the same). The clip is in the coordinates of
-    the page as rendered."""
-    page, to_turned, back, _ = turn
-    clip = (fitz.Rect(box[0] - PAD, box[1] - PAD, box[2] + PAD, box[3] + PAD) * to_turned) & page.rect
-    pix = page.get_pixmap(dpi=dpi, clip=clip, colorspace=fitz.csGRAY, alpha=False)
-    return pix.tobytes("png"), pix.width, pix.height, pix.x, pix.y, None if back == fitz.Identity else back
+    crop's top-left pixel sits, in pixels at that dpi on the turned page; and (turn, width, height) to map
+    the turned page's points back to the displayed page (None when they're the same). The crop's pixels are
+    those of the whole page rendered at dpi that the padded box, clipped to the page, covers: its edges
+    rounded outwards (as MuPDF rounded them)."""
+    page, turn_by, w, h = turn
+    tw, th = (h, w) if turn_by in (90, 270) else (w, h)
+    x0, y0, x1, y1 = turn_box([box[0] - PAD, box[1] - PAD, box[2] + PAD, box[3] + PAD], turn_by, w, h)
+    x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, tw), min(y1, th)
+    z = dpi / 72
+    full_w, full_h = math.ceil(tw * z - 0.001), math.ceil(th * z - 0.001)
+    px0, py0 = max(0, math.floor(x0 * z + 0.001)), max(0, math.floor(y0 * z + 0.001))
+    px1, py1 = min(full_w, math.ceil(x1 * z - 0.001)), min(full_h, math.ceil(y1 * z - 0.001))
+    bitmap = pdfium.PdfBitmap.new_native(max(px1 - px0, 1), max(py1 - py0, 1), format=pdfium_c.FPDFBitmap_Gray)
+    bitmap.fill_rect((255, 255, 255, 255), 0, 0, bitmap.width, bitmap.height)
+    # the page drawn at dpi with its top-left at (-px0, -py0), so the bitmap holds just the crop
+    args = (bitmap, page, -px0, -py0, full_w, full_h, {0: 0, 90: 1, 180: 2, 270: 3}[turn_by],
+            pdfium_c.FPDF_ANNOT | pdfium_c.FPDF_GRAYSCALE)
+    pdfium_c.FPDF_RenderPageBitmap(*args)
+    if page.formenv:
+        pdfium_c.FPDF_FFLDraw(page.formenv, *args)
+    png = io.BytesIO()
+    bitmap.to_pil().save(png, "PNG")
+    bitmap.close()
+    return png.getvalue(), px1 - px0, py1 - py0, px0, py0, None if turn_by == 0 else ((360 - turn_by) % 360, tw, th)
 
 
 def read(png, dpi, key):
@@ -330,7 +369,15 @@ def main():
             if d.get("status") != "ok":
                 row["status"] = d.get("status")
                 continue
-            with fitz.open(d["file"]) as doc:
+            try:
+                doc = pdfium.PdfDocument(d["file"])
+            except pdfium.PdfiumError as e:  # a file PDFium can't open gets no crops, and says why
+                row["unrendered"] = str(e)
+                row["pages"] = [{"n": p["n"], "crops": []} for p in d["pages"]]
+                print(f"{d['file']}: not rendered, no crops read ({e})", file=sys.stderr)
+                continue
+            doc.init_forms()  # form fields drawn as they show (MuPDF drew them too)
+            try:
                 for p in d["pages"]:
                     if picked is not None and (Path(d["file"]).name, p["n"]) not in picked:
                         continue
@@ -356,9 +403,10 @@ def main():
                                 futures[key] = pool.submit(one, png, dpi, key)
                             del png
                     row["pages"].append({"n": p["n"], "crops": crops})
-            # MuPDF keeps decoded images in its store across files; emptied after each file so memory
-            # stays flat over a long list
-            fitz.TOOLS.store_shrink(100)
+            finally:
+                # the document and its decoded images are freed after each file, so memory stays flat
+                # over a long list
+                doc.close()
         results = {k: f.result() for k, f in futures.items()}
     unique = futures
     timed = set()
@@ -367,10 +415,9 @@ def main():
         c["secs"] = 0.0 if c["cache"] in timed else took
         timed.add(c["cache"])
         c["words"] = words_of_ppocr(tsv, ox, oy, c["dpi"]) if ppocr else words_of(tsv, ox, oy, c["dpi"])
-        if rot is not None:
+        if rot is not None:  # from the turned page back to the page as displayed
             for w in c["words"]:
-                r = fitz.Rect(w[:4]) * rot
-                w[:4] = [round(r.x0, 2), round(r.y0, 2), round(r.x1, 2), round(r.y1, 2)]
+                w[:4] = [round(v, 2) for v in turn_box(w[:4], *rot)]
         c["words"] = [w for w in c["words"] if kept(w, core)]
     Path(opt["out"]).write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
     words = sum(len(c["words"]) for c, *_ in jobs)
