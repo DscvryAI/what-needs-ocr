@@ -62,7 +62,7 @@ The browser build after these changes (ac5a028) gives the same routes and merges
 
 ## The shared PDF reader (6 October 2026)
 
-where-are-the-regions now reads PDFs through [pdf-core](https://github.com/sharad-bapat/pdf-core), the parser it used to share by copy with scan-or-text and wordbox; its page map and image kinds came out identical on all 1,113 of its test files. The frozen record here now holds the pdf-core commit as well as where-are-the-regions', and routing on the tune split is unchanged.
+where-are-the-regions now reads PDFs through [pdf-core](https://github.com/DscvryAI/pdf-core), the parser it used to share by copy with scan-or-text and wordbox; its page map and image kinds came out identical on all 1,113 of its test files. The frozen record here now holds the pdf-core commit as well as where-are-the-regions', and routing on the tune split is unchanged.
 
 ## Long crops read in strips (6 October 2026)
 

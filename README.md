@@ -2,9 +2,9 @@
 
 What needs OCR? Most PDFs made on a computer carry their text, but parts of a page can exist only as pixels: a scanned page pasted into a contract, a chart exported as a picture, a logo, letters drawn as outlines, or a text layer whose characters don't decode to anything. This tool finds those parts on each page, crops them, has Tesseract read the crops and nothing else, and merges what it reads with the file's own words, each word with its box and where it came from. On held-out government PDFs it sent 5.5% of the page area to OCR, against 98.8% for OCR'ing every page, and its word error against the reference was 4 points lower.
 
-It's the fifth in a series, after [file-checker](https://github.com/sharad-bapat/file-checker) (what is this upload?), [scan-or-text](https://github.com/sharad-bapat/scan-or-text) (does this PDF need OCR?), [wordbox](https://github.com/sharad-bapat/wordbox) (where is the text?) and [where-are-the-regions](https://github.com/sharad-bapat/where-are-the-regions) (what does each page draw?). It reads the page map where-are-the-regions makes, and scan-or-text's question gets a per-region answer here instead of one per file.
+It's the fifth in a series, after [file-checker](https://github.com/DscvryAI/file-checker) (what is this upload?), [scan-or-text](https://github.com/DscvryAI/scan-or-text) (does this PDF need OCR?), [wordbox](https://github.com/DscvryAI/wordbox) (where is the text?) and [where-are-the-regions](https://github.com/DscvryAI/where-are-the-regions) (what does each page draw?). It reads the page map where-are-the-regions makes, and scan-or-text's question gets a per-region answer here instead of one per file.
 
-The write-up, with a demo you can try, is at https://sharadbapat.com/experiments/what-needs-ocr/.
+The write-up, with a demo you can try, is at https://dscvryai.com/insights/what-needs-ocr/.
 
 ## Output
 
